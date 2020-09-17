@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/omzlo/sscp"
+	"github.com/omzlo/go-sscp"
 	"log"
 )
 

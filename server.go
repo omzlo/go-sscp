@@ -12,7 +12,7 @@ func ServerWrapper(conn net.Conn, id []byte, password []byte) (*Conn, error) {
 		return nil, err
 	}
 	if n != len(clientHelloMessage) {
-		return nil, fmt.Errorf("clientHelloMessage was only %d bytes", n)
+		return nil, fmt.Errorf("sscp clientHelloMessage was only %d bytes, expected %d", n, len(clientHelloMessage))
 	}
 	var serverHelloMessage [17]byte
 	zeroize(serverHelloMessage[:])
@@ -27,7 +27,7 @@ func ServerWrapper(conn net.Conn, id []byte, password []byte) (*Conn, error) {
 		return nil, err
 	}
 	if clientHelloMessage[0] != SSCONN_VERSION {
-		return nil, fmt.Errorf("Client version mismatch: client is %s, want %d", clientHelloMessage[0], SSCONN_VERSION)
+		return nil, fmt.Errorf("Client version mismatch: client is %d, want %d", clientHelloMessage[0], SSCONN_VERSION)
 	}
 
 	var Q [384]byte
@@ -123,7 +123,12 @@ func (l *Listener) Accept() (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return ServerWrapper(conn, l.id, l.password)
+	rconn, err := ServerWrapper(conn, l.id, l.password)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return rconn, nil
 }
 
 func (l *Listener) Close() error {
