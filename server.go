@@ -27,7 +27,7 @@ func ServerWrapper(conn net.Conn, id []byte, password []byte) (*Conn, error) {
 		return nil, err
 	}
 	if clientHelloMessage[0] != SSCONN_VERSION {
-		return nil, fmt.Errorf("Client version mismatch: client is %s, want %d", clientHelloMessage[0], SSCONN_VERSION)
+		return nil, fmt.Errorf("Client version mismatch: client is %d, want %d", clientHelloMessage[0], SSCONN_VERSION)
 	}
 
 	var Q [384]byte

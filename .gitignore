@@ -1,0 +1,9 @@
+.*.swp
+nocand
+examples/client/client
+examples/server/server
+*.dat
+.DS_Store
+*.hex
+*.o
+

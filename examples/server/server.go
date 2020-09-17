@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/omzlo/sscp"
+	"github.com/omzlo/go-sscp"
 	"log"
 	"net"
 )
@@ -28,15 +28,19 @@ func main() {
 		log.Print("Connected")
 		go func(c net.Conn) {
 			var buf [1000]byte
-			n, err := c.Read(buf[:])
-			if err != nil {
-				log.Fatal(sscp.UnsafeCryptoError(err))
-			}
-			log.Printf("Got %d bytes: %q", n, buf[:n])
-			_, err = c.Write(buf[:n])
-			if err != nil {
-				log.Fatal(sscp.UnsafeCryptoError(err))
-			}
+
+      for {
+        n, err := c.Read(buf[:])
+        if err != nil {
+          log.Fatal(sscp.UnsafeCryptoError(err))
+        }
+        log.Printf(">>> Got %d bytes: %q", n, buf[:n])
+        _, err = c.Write(buf[:n])
+        if err != nil {
+          log.Fatal(sscp.UnsafeCryptoError(err))
+        }
+        log.Printf("Wrote back %d bytes", n);
+      }
 		}(sconn)
 	}
 }

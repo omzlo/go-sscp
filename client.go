@@ -210,6 +210,7 @@ func (conn *Conn) readPacket() (int, error) {
 	if seqnum != conn.rIndex {
 		return 0, NewCryptoError("Sequence number mismatch in read")
 	}
+  conn.rIndex++
 
 	mac := hmac.New(sha256.New, conn.macKey[:])
 	mac.Write(payload[:payload_length-16])

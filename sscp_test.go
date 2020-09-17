@@ -7,8 +7,6 @@ import (
 const (
 	BYTE_LEN     = 384
 	BIT_LEN      = BYTE_LEN * 8
-	R_TEST       = "5329267736965544467598856822017234368412672910992870544172783720145503831101088720443489142104948221551013835617470154953061002943307743610569506223028144159433113649488179761526659183384728590287339635774974869818284525538386785194360121096396500255068906726084211539135438395382553284378052363675253016484955244355302509271933859094454775346968634350025379890587285143737694915672860466924867065652012037851576928451756290832929928595099597937401940894456038167369153923426393504497878181971515271628079705568330222438567483617867417566377308384733704067185311905551280953535087058436774709109217108417382834532740017476312108402005401555722680423248016004542960840552251218230871646229316377199271781868778236221716441280327294376208712821897317688125446616831948815887804845841147769139366595935330089717635014764566608456859620004125219133075479363716140213415744907818949049845614422914061997590437442413664676523217834"
-	P123456789_R = "2523268152106062301135789009075799538138319692510494069707595774247338580614568672226282319328388729656311891219829786040830720895183140271761740554910797756295643310689518770948105397565140193131646084924316948067519847310808411241537032294897899746500074009763764542460795781884228237105493353159853815094496457987344942083220906042844601845331422078239701068098213712590929278375879978267373894786810507988260739359434078227598008826225614735411366353075644295370799492018416881231598239122980713673646045344869233039310552432728392059322780063257929861721272615948821228066431932908366651971721786383041786439356756599282978368095490017363701264617567458530995556601305433096013114083923653743030083399244430177887038953368475653140855021835523012562079364109159310955936398422803165350950549781212261537746019218005496148251621390247516740166244661476721158611512226684409565930593583825478341461327424849686888295925882"
 )
 
 func TestSizes(t *testing.T) {
@@ -16,7 +14,147 @@ func TestSizes(t *testing.T) {
 	if dhkey.P.BitLen() != BIT_LEN {
 		t.Errorf("DHKey P length is incorrect: %d", dhkey.P.BitLen())
 	}
-
-	//dhkey.R.SetString(R_TEST, 10)
-
 }
+
+func TestClientServer(t *testing.T) {
+  l, err := Listen("tcp", ":4242", []byte("server"), []byte("password"))
+  if err != nil {
+    t.Fatal(err)
+  }
+  defer l.Close()
+
+  go func() {
+    t.Logf("S: Accepting")
+    for {
+      sconn, err := l.Accept()
+      if err != nil {
+        t.Fatal(UnsafeCryptoError(err))
+      }
+      t.Logf("S: Connected")
+
+      var buf [10000]byte
+      n, err := sconn.Read(buf[:])
+      if err != nil {
+        t.Fatal(UnsafeCryptoError(err))
+      }
+      t.Logf("S: Got %d bytes", n)
+      _, err = sconn.Write(buf[:n])
+      if err != nil {
+        t.Fatal(UnsafeCryptoError(err))
+      }
+      sconn.Close()
+      if n>8192 {
+        break
+      }
+    }
+    t.Logf("S: Ending it all.") 
+  }()
+
+  for l:=0; l<=13; l++ {
+
+    length := (1<<l)+1
+    message := make([]byte, length)
+    for i:=0;i<length;i++ {
+      message[i]=byte(l)
+    }
+
+    conn, err := Dial("tcp", "localhost:4242", []byte("client"), []byte("password"))
+    if err != nil {
+      t.Fatal(UnsafeCryptoError(err))
+    }
+
+
+    t.Logf("C: write %d", length)
+    _, err = conn.Write(message)
+    if err != nil {
+      t.Fatal(UnsafeCryptoError(err))
+    }
+    t.Log("C: read")
+    var buf [10000]byte
+    n, err := conn.Read(buf[:])
+    if err != nil {
+      t.Fatal(UnsafeCryptoError(err))
+    }
+    t.Logf("C: Got %d bytes", n)
+    t.Log("C: close")
+    err = conn.Close()
+    if err != nil {
+      t.Fatal(err)
+    }
+  }
+  t.Log("C: Ending it all")
+}
+
+const PingMax = 300
+
+func TestClientServerPingPong(t *testing.T) {
+  l, err := Listen("tcp", ":4242", []byte("server"), []byte("password"))
+  if err != nil {
+    t.Fatal(err)
+  }
+  defer l.Close()
+
+  go func() {
+    t.Logf("S: Accepting") 
+    sconn, err := l.Accept()
+    if err != nil {
+      t.Fatal(UnsafeCryptoError(err))
+    }
+    t.Logf("S: Connected")
+
+    for {
+      var buf [1000]byte
+      n, err := sconn.Read(buf[:])
+      if err != nil {
+        t.Fatal(UnsafeCryptoError(err))
+      }
+      t.Logf("S: Got %d bytes, sending %d", n, n+1)
+      buf[n] = byte(n)
+      _, err = sconn.Write(buf[:n+1])
+      if err != nil {
+        t.Fatal(UnsafeCryptoError(err))
+      }
+      if n+1==PingMax {
+        break
+      }
+    }
+    sconn.Close()
+    t.Logf("S: Closing and ending it all")
+  }()
+
+  t.Logf("C: Dialing...")
+
+  conn, err := Dial("tcp", "localhost:4242", []byte("client"), []byte("password"))
+  if err != nil {
+    t.Fatal(UnsafeCryptoError(err))
+  }
+
+  var sbuf [1000]byte
+  var rbuf [1000]byte
+
+  for l:=1; l<PingMax; l++ {
+    for i:=0;i<l;i++ {
+      sbuf[i]=byte(i)
+    }
+
+    t.Logf("C: write %d", l)
+    _, err = conn.Write(sbuf[:l])
+    if err != nil {
+      t.Fatal(UnsafeCryptoError(err))
+    }
+    t.Log("C: read")
+    n, err := conn.Read(rbuf[:])
+    if err != nil {
+      t.Fatal(UnsafeCryptoError(err))
+    }
+    t.Logf("C: Got %d bytes", n)
+  }
+  t.Log("C: close")
+  err = conn.Close()
+  if err != nil {
+    t.Fatal(err)
+  }
+  t.Log("C: ending it all")
+}
+
+
