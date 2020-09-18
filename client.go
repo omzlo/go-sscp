@@ -51,98 +51,88 @@ func isequal(a, b []byte) bool {
 }
 
 func ClientWrapper(conn net.Conn, id []byte, password []byte) (*Conn, error) {
-	var clientHelloMessage [17]byte
-	zeroize(clientHelloMessage[:])
-	clientHelloMessage[0] = SSCONN_VERSION
-	copy(clientHelloMessage[1:], id)
+    var clientHelloMessage [17]byte
+    zeroize(clientHelloMessage[:])
+    clientHelloMessage[0] = SSCONN_VERSION
+    copy(clientHelloMessage[1:], id)
 
-	_, err := conn.Write(clientHelloMessage[:])
-	if err != nil {
-		return nil, err
-	}
+    _, err := conn.Write(clientHelloMessage[:])
+    if err != nil {
+        return nil, err
+    }
 
-	var serverHelloMessage [17]byte
-	zeroize(serverHelloMessage[:])
-	r, err := conn.Read(serverHelloMessage[:])
-	if err != nil {
-		return nil, err
-	}
-	if r != 17 {
-		return nil, fmt.Errorf("Expected 17 bytes in ServerHelloMessage, got %d", r)
-	}
-	if serverHelloMessage[0] != 0 {
-		return nil, fmt.Errorf("ServerHelloMessage returned status %d", serverHelloMessage[0])
-	}
+    var serverHelloMessage [17]byte
+    zeroize(serverHelloMessage[:])
+    r, err := conn.Read(serverHelloMessage[:])
+    if err != nil {
+        return nil, err
+    }
+    if r != 17 {
+        return nil, fmt.Errorf("Expected 17 bytes in ServerHelloMessage, got %d", r)
+    }
+    if serverHelloMessage[0] != 0 {
+        return nil, fmt.Errorf("ServerHelloMessage returned status %d", serverHelloMessage[0])
+    }
 
-	dhkey := NewDHKey()
-	var abpw []byte
-	abpw = append(abpw, clientHelloMessage[1:]...)
-	abpw = append(abpw, serverHelloMessage[1:]...)
-	abpw = append(abpw, password...)
-	//fmt.Printf("abpw=%q\n", abpw)
-	H1_abpw := H1(abpw)
-	if iszero(H1_abpw) {
-		return nil, NewCryptoError("Null password hash H1")
-	}
-	//fmt.Printf("GRa = %q\n", dhkey.GR.Bytes())
-	//fmt.Printf("H1_abpw = %q\n", H1_abpw)
-  var X [384]byte
-  dhkey.GRMul(H1_abpw, X[:])
-	//fmt.Printf("X = GRa * H1(abpw) = %q\n", X)
-	//dhkey.Div(X, H1_abpw)
-	//fmt.Printf("X / H1(abpw) = %q\n", XX)
-	//fmt.Printf("Xlen = %d\n", len(X))
+    dhkey := NewDHKey()
+    abpw := Concat(clientHelloMessage[1:], serverHelloMessage[1:], password)
+    H1_abpw := H1(abpw)
+    if iszero(H1_abpw) {
+        return nil, NewCryptoError("Null password hash H1")
+    }
 
-  _, err = conn.Write(X[:])
-	if err != nil {
-		return nil, err
-	}
+    var X B384
+    dhkey.GRMul(H1_abpw, X[:])
 
-	var Y_S1 [384 + 16]byte
-	r, err = conn.Read(Y_S1[:])
-	if err != nil {
-		return nil, err
-	}
-	if r != len(Y_S1) {
-		return nil, NewCryptoError("Server returned truncated response for Y_S1")
-	}
-	if iszero(Y_S1[:384]) {
-		return nil, NewCryptoError("Server returned null Y")
-	}
-	H2_abpw := H2(abpw)
-  var yba [384]byte
-  dhkey.Div(Y_S1[:384], H2_abpw, yba[:])
-  var yba_ra [384]byte
-  var gr_bytes [384]byte
-  dhkey.GR.FillBytes(gr_bytes[:])
-  dhkey.ExpR(yba[:], yba_ra[:])
-	s1check := abpw
-  s1check = append(s1check, gr_bytes[:]...)
-  s1check = append(s1check, yba[:]...)
-  s1check = append(s1check, yba_ra[:]...)
-	s1 := H3(s1check)
-	if !isequal(Y_S1[384:], s1) {
-		return nil, NewCryptoError("S1 mismatch")
-	}
+    _, err = conn.Write(X[:])
+    if err != nil {
+        return nil, err
+    }
 
-	S2 := H4(s1check)
-	_, err = conn.Write(S2)
-	if err != nil {
-		return nil, err
-	}
+    var Y_S1 [Group15BlockLen + 16]byte
+    r, err = conn.Read(Y_S1[:])
+    if err != nil {
+        return nil, err
+    }
+    if r != len(Y_S1) {
+        return nil, NewCryptoError("Server returned truncated response for Y_S1")
+    }
+    if iszero(Y_S1[:Group15BlockLen]) {
+        return nil, NewCryptoError("Server returned null Y")
+    }
 
-	encK := H5(s1check)
-	macK := H6(s1check)
+    H2_abpw := H2(abpw)
+    var yba B384
+    dhkey.Div(Y_S1[:Group15BlockLen], H2_abpw, yba[:])
+    var yba_ra B384
+    var gr_bytes B384
+    dhkey.GR.FillBytes(gr_bytes[:])
+    dhkey.ExpR(yba[:], yba_ra[:])
 
-	sconn := new(Conn)
-	sconn.conn = conn
-	copy(sconn.localId[:], id)
-	copy(sconn.remoteId[:], serverHelloMessage[1:])
-	copy(sconn.encKey[:], encK)
-	copy(sconn.macKey[:], macK)
-	sconn.rIndex = 0
-	sconn.wIndex = 0
-	return sconn, nil
+    s1check := Concat(abpw, gr_bytes[:], yba[:], yba_ra[:])
+    s1 := H3(s1check)
+    if !isequal(Y_S1[Group15BlockLen:], s1) {
+        return nil, NewCryptoError("S1 mismatch")
+    }
+
+    S2 := H4(s1check)
+    _, err = conn.Write(S2)
+    if err != nil {
+        return nil, err
+    }
+
+    encK := H5(s1check)
+    macK := H6(s1check)
+
+    sconn := new(Conn)
+    sconn.conn = conn
+    copy(sconn.localId[:], id)
+    copy(sconn.remoteId[:], serverHelloMessage[1:])
+    copy(sconn.encKey[:], encK)
+    copy(sconn.macKey[:], macK)
+    sconn.rIndex = 0
+    sconn.wIndex = 0
+    return sconn, nil
 
 }
 
@@ -188,18 +178,18 @@ func (conn *Conn) readPacket() (int, error) {
 		return 0, fmt.Errorf("Payload encrypted data must have a length multiple of 16")
 	}
 	var payload []byte
-	var r uint32 = 0
-	for r < payload_length {
+	var rcurrent uint32 = 0
+	for rcurrent < payload_length {
 		var block [4096]byte
 		var expected uint32
 		var block_len uint32 = 4096
 
-		if r+block_len > payload_length {
-			expected = payload_length - r
+		if rcurrent+block_len > payload_length {
+			expected = payload_length - rcurrent
 		} else {
 			expected = block_len
 		}
-		n, err = conn.conn.Read(block[:])
+		n, err = conn.conn.Read(block[:expected])
 		if err != nil {
 			return 0, err
 		}
@@ -207,7 +197,7 @@ func (conn *Conn) readPacket() (int, error) {
 			return 0, fmt.Errorf("Expected block of %d bytes of payload, got %d", expected, n)
 		}
 		payload = append(payload, block[:expected]...)
-		r += expected
+		rcurrent += expected
 	}
 	// fmt.Printf("p = %q\n", payload)
 
@@ -215,7 +205,7 @@ func (conn *Conn) readPacket() (int, error) {
 	if seqnum != conn.rIndex {
 		return 0, NewCryptoError("Sequence number mismatch in read")
 	}
-  conn.rIndex++
+    conn.rIndex++
 
 	mac := hmac.New(sha256.New, conn.macKey[:])
 	mac.Write(payload[:payload_length-16])
