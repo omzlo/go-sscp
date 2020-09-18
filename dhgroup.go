@@ -41,18 +41,18 @@ func NewDHKey() *DHKey {
 		panic("Exp failed")
 	}
 
-	return &DHKey{P: prime, G: generator, R: private_key, GR: public_key}
+  return &DHKey{P: prime, G: generator, R: private_key, GR: public_key}
 }
 
-func (key *DHKey) GRMul(val []byte) []byte {
+func (key *DHKey) GRMul(val []byte, result []byte) []byte {
 	a := new(big.Int).SetBytes(val)
 	b := key.GR
 	r := new(big.Int).Mul(a, b)
 	r.Mod(r, key.P)
-	return r.Bytes()
+  return r.FillBytes(result)
 }
 
-func (key *DHKey) Div(a []byte, b []byte) []byte {
+func (key *DHKey) Div(a []byte, b []byte, result []byte) []byte {
 	//fmt.Println("#### DIV ####")
 	//fmt.Printf("a = %q\nb=%q\n", a, b)
 	aa := new(big.Int).SetBytes(a)
@@ -64,23 +64,23 @@ func (key *DHKey) Div(a []byte, b []byte) []byte {
 	ss := new(big.Int)
 	ss.Mod(rr, key.P)
 	//fmt.Printf("ss = %s\n\n", ss)
-	return ss.Bytes()
+	return ss.FillBytes(result)
 }
 
-func (key *DHKey) ExpR(val []byte) []byte {
+func (key *DHKey) ExpR(val []byte, result []byte) []byte {
 	v := new(big.Int).SetBytes(val)
 	r := new(big.Int).Exp(v, key.R, key.P)
-	return r.Bytes()
+	return r.FillBytes(result)
 }
 
 //--
 
-func (key *DHKey) Mul(a []byte, b []byte) []byte {
+func (key *DHKey) Mul(a []byte, b []byte, result []byte) []byte {
 	aa := new(big.Int).SetBytes(a)
 	bb := new(big.Int).SetBytes(b)
 	r := new(big.Int).Mul(aa, bb)
 	r.Mod(r, key.P)
-	return r.Bytes()
+	return r.FillBytes(result)
 }
 
 func hash128(i byte, j byte, z []byte) []byte {

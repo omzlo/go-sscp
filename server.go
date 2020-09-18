@@ -47,19 +47,25 @@ func ServerWrapper(conn net.Conn, id []byte, password []byte) (*Conn, error) {
 	//fmt.Printf("abpw=%q\n", abpw)
 	//fmt.Printf("Q=%q\n", Q)
 	//fmt.Printf("H1_abpw=%q\n", H1_abpw)
-	xab := dhkey.Div(Q[:], H1_abpw)
+	var xab [384]byte
+  dhkey.Div(Q[:], H1_abpw, xab[:])
 	//fmt.Printf("Q / H1(abpw)=%q\n", xab)
 
 	var Y_S1 [384 + 16]byte
 	H2_abpw := H2(abpw)
-	Y := dhkey.GRMul(H2_abpw)
-	xab_rb := dhkey.ExpR(xab)
+  var Y [384]byte
+  dhkey.GRMul(H2_abpw, Y[:])
+  var xab_rb [384]byte
+  var gr_bytes [384]byte
+  dhkey.GR.FillBytes(gr_bytes[:])
+
+  dhkey.ExpR(xab[:], xab_rb[:])
 	s1chal := abpw
-	s1chal = append(s1chal, xab...)
-	s1chal = append(s1chal, dhkey.GR.Bytes()...)
-	s1chal = append(s1chal, xab_rb...)
+  s1chal = append(s1chal, xab[:]...)
+  s1chal = append(s1chal, gr_bytes[:]...)
+  s1chal = append(s1chal, xab_rb[:]...)
 	S1 := H3(s1chal)
-	copy(Y_S1[:], Y)
+  copy(Y_S1[:], Y[:])
 	copy(Y_S1[384:], S1)
 
 	_, err = conn.Write(Y_S1[:])
@@ -76,9 +82,9 @@ func ServerWrapper(conn net.Conn, id []byte, password []byte) (*Conn, error) {
 		return nil, fmt.Errorf("S2 length error: got %d bytes", n)
 	}
 	s2check := abpw
-	s2check = append(s2check, xab...)
-	s2check = append(s2check, dhkey.GR.Bytes()...)
-	s2check = append(s2check, xab_rb...)
+  s2check = append(s2check, xab[:]...)
+  s2check = append(s2check, gr_bytes[:]...)
+  s2check = append(s2check, xab_rb[:]...)
 	S2p := H4(s2check)
 	if !isequal(S2[:], S2p[:]) {
 		return nil, fmt.Errorf("S2 mismatch")

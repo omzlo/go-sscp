@@ -86,13 +86,14 @@ func ClientWrapper(conn net.Conn, id []byte, password []byte) (*Conn, error) {
 	}
 	//fmt.Printf("GRa = %q\n", dhkey.GR.Bytes())
 	//fmt.Printf("H1_abpw = %q\n", H1_abpw)
-	X := dhkey.GRMul(H1_abpw)
+  var X [384]byte
+  dhkey.GRMul(H1_abpw, X[:])
 	//fmt.Printf("X = GRa * H1(abpw) = %q\n", X)
 	//dhkey.Div(X, H1_abpw)
 	//fmt.Printf("X / H1(abpw) = %q\n", XX)
 	//fmt.Printf("Xlen = %d\n", len(X))
 
-	_, err = conn.Write(X)
+  _, err = conn.Write(X[:])
 	if err != nil {
 		return nil, err
 	}
@@ -109,12 +110,16 @@ func ClientWrapper(conn net.Conn, id []byte, password []byte) (*Conn, error) {
 		return nil, NewCryptoError("Server returned null Y")
 	}
 	H2_abpw := H2(abpw)
-	yba := dhkey.Div(Y_S1[:384], H2_abpw)
-	yba_ra := dhkey.ExpR(yba)
+  var yba [384]byte
+  dhkey.Div(Y_S1[:384], H2_abpw, yba[:])
+  var yba_ra [384]byte
+  var gr_bytes [384]byte
+  dhkey.GR.FillBytes(gr_bytes[:])
+  dhkey.ExpR(yba[:], yba_ra[:])
 	s1check := abpw
-	s1check = append(s1check, dhkey.GR.Bytes()...)
-	s1check = append(s1check, yba...)
-	s1check = append(s1check, yba_ra...)
+  s1check = append(s1check, gr_bytes[:]...)
+  s1check = append(s1check, yba[:]...)
+  s1check = append(s1check, yba_ra[:]...)
 	s1 := H3(s1check)
 	if !isequal(Y_S1[384:], s1) {
 		return nil, NewCryptoError("S1 mismatch")
