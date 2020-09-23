@@ -9,13 +9,6 @@ const (
 	BIT_LEN  = BYTE_LEN * 8
 )
 
-func TestSizes(t *testing.T) {
-	dhkey := NewDHKey()
-	if dhkey.P.BitLen() != BIT_LEN {
-		t.Errorf("DHKey P length is incorrect: %d", dhkey.P.BitLen())
-	}
-}
-
 func TestClientServer(t *testing.T) {
 	l, err := Listen("tcp", ":4242", []byte("server"), []byte("password"))
 	if err != nil {
@@ -50,7 +43,7 @@ func TestClientServer(t *testing.T) {
 		t.Logf("S: Ending it all.")
 	}()
 
-	for l := 0; l <= 13; l++ {
+	for l := uint(0); l <= 13; l++ {
 
 		length := (1 << l) + 1
 		message := make([]byte, length)

@@ -18,8 +18,7 @@ type Conn struct {
 	conn     net.Conn
 	localId  [16]byte
 	remoteId [16]byte
-	encKey   [16]byte
-	macKey   [16]byte
+	Cipher   cipher.AEAD
 	rIndex   uint32
 	wIndex   uint32
 	rBuf     []byte
@@ -50,89 +49,102 @@ func isequal(a, b []byte) bool {
 	return true
 }
 
-func ClientWrapper(conn net.Conn, id []byte, password []byte) (*Conn, error) {
-    var clientHelloMessage [17]byte
-    zeroize(clientHelloMessage[:])
-    clientHelloMessage[0] = SSCONN_VERSION
-    copy(clientHelloMessage[1:], id)
+func ClientWrapper(conn net.Conn, id []byte, secret []byte) (*Conn, error) {
+	var clientHelloMessage [33]byte
+	var Ra [16]byte
 
-    _, err := conn.Write(clientHelloMessage[:])
-    if err != nil {
-        return nil, err
-    }
+	zeroize(clientHelloMessage[:])
+	clientHelloMessage[0] = SSCONN_VERSION
+	copy(clientHelloMessage[1:17], id)
 
-    var serverHelloMessage [17]byte
-    zeroize(serverHelloMessage[:])
-    r, err := conn.Read(serverHelloMessage[:])
-    if err != nil {
-        return nil, err
-    }
-    if r != 17 {
-        return nil, fmt.Errorf("Expected 17 bytes in ServerHelloMessage, got %d", r)
-    }
-    if serverHelloMessage[0] != 0 {
-        return nil, fmt.Errorf("ServerHelloMessage returned status %d", serverHelloMessage[0])
-    }
+	if _, err := io.ReadFull(rand.Reader, Ra[:]); err != nil {
+		return nil, err
+	}
+	copy(clientHelloMessage[17:], Ra[:])
 
-    dhkey := NewDHKey()
-    abpw := Concat(clientHelloMessage[1:], serverHelloMessage[1:], password)
-    H1_abpw := H1(abpw)
-    if iszero(H1_abpw) {
-        return nil, NewCryptoError("Null password hash H1")
-    }
+	_, err := conn.Write(clientHelloMessage[:])
+	if err != nil {
+		return nil, err
+	}
 
-    var X B384
-    dhkey.GRMul(H1_abpw, X[:])
+	var serverHelloMessage [113]byte
+	zeroize(serverHelloMessage[:])
+	r, err := conn.Read(serverHelloMessage[:])
+	if err != nil {
+		return nil, err
+	}
+	if r != 113 {
+		return nil, fmt.Errorf("Expected 113 bytes in ServerHelloMessage, got %d", r)
+	}
+	if serverHelloMessage[0] != 0 {
+		return nil, fmt.Errorf("ServerHelloMessage returned status %d", serverHelloMessage[0])
+	}
 
-    _, err = conn.Write(X[:])
-    if err != nil {
-        return nil, err
-    }
+	MK := KeyDerivation(secret, 128, 1024)
 
-    var Y_S1 [Group15BlockLen + 16]byte
-    r, err = conn.Read(Y_S1[:])
-    if err != nil {
-        return nil, err
-    }
-    if r != len(Y_S1) {
-        return nil, NewCryptoError("Server returned truncated response for Y_S1")
-    }
-    if iszero(Y_S1[:Group15BlockLen]) {
-        return nil, NewCryptoError("Server returned null Y")
-    }
+	auth := hmac.New(sha256.New, MK[0:16])
+	auth.Write(serverHelloMessage[1:81])
+	mac1 := auth.Sum(nil)
 
-    H2_abpw := H2(abpw)
-    var yba B384
-    dhkey.Div(Y_S1[:Group15BlockLen], H2_abpw, yba[:])
-    var yba_ra B384
-    var gr_bytes B384
-    dhkey.GR.FillBytes(gr_bytes[:])
-    dhkey.ExpR(yba[:], yba_ra[:])
+	//fmt.Printf("Mac of\n%x is\n%x\nGot %x\n", serverHelloMessage[1:81], mac1, serverHelloMessage[81:])
 
-    s1check := Concat(abpw, gr_bytes[:], yba[:], yba_ra[:])
-    s1 := H3(s1check)
-    if !isequal(Y_S1[Group15BlockLen:], s1) {
-        return nil, NewCryptoError("S1 mismatch")
-    }
+	if !hmac.Equal(mac1, serverHelloMessage[81:]) {
+		return nil, fmt.Errorf("ServerHelloMessage authentication failed")
+	}
 
-    S2 := H4(s1check)
-    _, err = conn.Write(S2)
-    if err != nil {
-        return nil, err
-    }
+	if !AreEqual(serverHelloMessage[17:33], clientHelloMessage[1:17]) {
+		return nil, fmt.Errorf("ServerHelloMessage identity mismatch, got %x, expected %x", serverHelloMessage[17:33], clientHelloMessage[1:17])
+	}
+	if !AreEqual(serverHelloMessage[33:49], Ra[:]) {
+		return nil, fmt.Errorf("ServerHelloMessage nonce mismatch, got %x, expected %x", clientHelloMessage[16:32], Ra)
+	}
 
-    encK := H5(s1check)
-    macK := H6(s1check)
+	enc, err := aes.NewCipher(MK[16:])
+	if err != nil {
+		return nil, fmt.Errorf("Failed to decryt shared key: %s", err)
+	}
 
-    sconn := new(Conn)
-    sconn.conn = conn
-    copy(sconn.localId[:], id)
-    copy(sconn.remoteId[:], serverHelloMessage[1:])
-    copy(sconn.encKey[:], encK)
-    copy(sconn.macKey[:], macK)
-    sconn.rIndex = 0
-    sconn.wIndex = 0
-    return sconn, nil
+	var Rb [16]byte
+	var Key [16]byte
+
+	copy(Rb[:], serverHelloMessage[49:])
+
+	enc.Decrypt(Key[:], serverHelloMessage[65:])
+
+	var clientHelloFinalize [64]byte
+	copy(clientHelloFinalize[:16], id)
+	copy(clientHelloFinalize[16:], Rb[:])
+	auth.Reset()
+	auth.Write(clientHelloFinalize[:32])
+	mac2 := auth.Sum(nil)
+	copy(clientHelloFinalize[32:], mac2)
+
+	_, err = conn.Write(clientHelloFinalize[:])
+	if err != nil {
+		return nil, err
+	}
+
+	//encK := PseudoRandomFunc1(Key[:])
+	//macK := PseudoRandomFunc2(Key[:])
+
+	sconn := new(Conn)
+	sconn.conn = conn
+	copy(sconn.localId[:], id)
+	copy(sconn.remoteId[:], serverHelloMessage[1:17])
+	//copy(sconn.Key[:], Key)
+	//copy(sconn.macKey[:], macK)
+	block, err := aes.NewCipher(Key[:])
+	if err != nil {
+		return nil, err
+	}
+	aesgcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	sconn.Cipher = aesgcm
+	sconn.rIndex = 0
+	sconn.wIndex = 0
+	return sconn, nil
 
 }
 
@@ -161,22 +173,28 @@ func getInt32(src []byte) uint32 {
 }
 
 func (conn *Conn) readPacket() (int, error) {
-	var plen [4]byte
+	var aux [8]byte
 
-	n, err := conn.conn.Read(plen[:])
+	n, err := conn.conn.Read(aux[:])
 	if err != nil {
 		return 0, err
 	}
-	if n != 4 {
-		return 0, fmt.Errorf("Truncated read (length)")
+	if n != 8 {
+		return 0, fmt.Errorf("Truncated packet header")
 	}
-	payload_length := getInt32(plen[:])
-	if payload_length < 37 {
-		return 0, fmt.Errorf("Payload truncation, expected at least 37 bytes, got %d", payload_length)
+
+	payload_length := getInt32(aux[:4])
+	if payload_length < 16 {
+		return 0, fmt.Errorf("Payload truncation: expected at last 16 bytes")
 	}
-	if (payload_length-37)&0xF != 0 {
-		return 0, fmt.Errorf("Payload encrypted data must have a length multiple of 16")
+	payload_length -= 4
+
+	seqnum := getInt32(aux[4:])
+	if seqnum != conn.rIndex {
+		return 0, fmt.Errorf("Sequence number mismatch in read, expected %d, got %d", conn.rIndex, seqnum)
 	}
+	conn.rIndex++
+
 	var payload []byte
 	var rcurrent uint32 = 0
 	for rcurrent < payload_length {
@@ -199,44 +217,16 @@ func (conn *Conn) readPacket() (int, error) {
 		payload = append(payload, block[:expected]...)
 		rcurrent += expected
 	}
-	// fmt.Printf("p = %q\n", payload)
 
-	seqnum := getInt32(payload[0:])
-	if seqnum != conn.rIndex {
-		return 0, NewCryptoError("Sequence number mismatch in read")
-	}
-    conn.rIndex++
-
-	mac := hmac.New(sha256.New, conn.macKey[:])
-	mac.Write(payload[:payload_length-16])
-	// fmt.Printf("MAC data len = %d\n", payload_length-16)
-	// fmt.Printf("EncPay = %q\n", payload[:payload_length-16])
-	sum := mac.Sum(nil)
-	if !isequal(sum[:16], payload[payload_length-16:]) {
-		return 0, NewCryptoError("MAC check failed")
-	}
-
-	enc, err := aes.NewCipher(conn.encKey[:])
+	nonce := payload[:12]
+	ciphertext := payload[12:]
+	plaintext, err := conn.Cipher.Open(nil, nonce, ciphertext, aux[4:])
 	if err != nil {
-		return 0, err
+		return 0, NewCryptoError(err.Error())
 	}
-	decryption := cipher.NewCBCDecrypter(enc, payload[4:20])
-	data := payload[21 : len(payload)-16]
-	decryption.CryptBlocks(data, data)
-	pad := payload[20]
-	if len(data) < int(pad) {
-		return 0, NewCryptoError("Padding value error")
-	}
-	for i := 0; i < int(pad); i++ {
-		if data[len(data)-i-1] != pad {
-			return 0, NewCryptoError("Padding value check error")
-		}
-	}
-	mlen := len(data) - int(pad)
 
-	conn.rBuf = make([]byte, mlen)
-	copy(conn.rBuf, data[:mlen])
-	return mlen, nil
+	conn.rBuf = plaintext
+	return len(plaintext), nil
 }
 
 func (conn *Conn) Read(b []byte) (int, error) {
@@ -258,54 +248,27 @@ func (conn *Conn) Read(b []byte) (int, error) {
 	return rblen, nil
 }
 
-// Packet format:
-// PayloadLength (4)
-// Payload:
-//  - Seqnum (4)
-//  - IV (16)
-//  - PayloadPadLen (1)
-//	- PayloadEnc (n*16)
-//  - PayLoadMac (16)
-
 func (conn *Conn) Write(b []byte) (int, error) {
-	block_count := (len(b) + 15) / 16
-	payload_length := uint32(4 + 16 + 1 + block_count*16 + 16)
-	packet := make([]byte, 4+payload_length)
-	bpad := make([]byte, block_count*16)
+	aux := make([]byte, 8)
 
-	// PayloadLength
-	putInt32(packet[0:], payload_length)
-
-	// Seqnum
-	putInt32(packet[4:], conn.wIndex)
-	conn.wIndex++
-
-	// IV
-	if _, err := io.ReadFull(rand.Reader, packet[8:24]); err != nil {
-		return 0, fmt.Errorf("Could not create IV: %s", err)
-	}
-	pad := byte(block_count*16 - len(b))
-	packet[24] = pad
-	copy(bpad, b)
-	for i := 0; i < int(pad); i++ {
-		bpad[len(bpad)-i-1] = pad
-	}
-	enc, err := aes.NewCipher(conn.encKey[:])
-	if err != nil {
+	nonce := make([]byte, 12)
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return 0, err
 	}
-	encryption := cipher.NewCBCEncrypter(enc, packet[8:24])
-	encryption.CryptBlocks(packet[25:], bpad)
 
-	mac := hmac.New(sha256.New, conn.macKey[:])
-	mac.Write(packet[4 : 4+payload_length-16])
-	// fmt.Printf("MAC data len=%d\n", payload_length-16)
-	// fmt.Printf("EncPay = %q\n", packet[4:4+payload_length-16])
+	// Seqnum
+	putInt32(aux[4:], conn.wIndex)
+	conn.wIndex++
 
-	sum := mac.Sum(nil)
-	copy(packet[25+len(bpad):], sum[:16])
+	ciphertext := conn.Cipher.Seal(nil, nonce, b, aux[4:])
 
-	//fmt.Printf("P = %q\n", packet)
+	// PayloadLength
+	putInt32(aux[:4], uint32(len(ciphertext)+12+4))
+
+	packet := make([]byte, len(ciphertext)+len(aux)+12)
+	copy(packet, aux)
+	copy(packet[8:], nonce)
+	copy(packet[20:], ciphertext)
 
 	return conn.conn.Write(packet)
 }
