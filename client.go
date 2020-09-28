@@ -73,6 +73,7 @@ func ClientWrapper(conn net.Conn, id []byte, secret []byte) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	if r != 113 {
 		return nil, fmt.Errorf("Expected 113 bytes in ServerHelloMessage, got %d", r)
 	}
@@ -80,7 +81,13 @@ func ClientWrapper(conn net.Conn, id []byte, secret []byte) (*Conn, error) {
 		return nil, fmt.Errorf("ServerHelloMessage returned status %d", serverHelloMessage[0])
 	}
 
-	MK := KeyDerivation(secret, 128, 1024)
+	var MK []byte
+	//if len(secret) < 16 {
+	//	MK = KeyDerivation(secret, KeyDerivationDefaultWidth, KeyDerivationDefaultDepth)
+	//} else {
+	x := sha256.Sum256([]byte(secret))
+	MK = x[:]
+	//}
 
 	auth := hmac.New(sha256.New, MK[0:16])
 	auth.Write(serverHelloMessage[1:81])
@@ -153,6 +160,7 @@ func Dial(network string, addr string, id []byte, password []byte) (*Conn, error
 	if err != nil {
 		return nil, err
 	}
+
 	sconn, err := ClientWrapper(conn, id, password)
 	if err != nil {
 		conn.Close()

@@ -13,25 +13,35 @@ import (
 
 func ServerWrapper(conn net.Conn, id []byte, secret []byte) (*Conn, error) {
 	var clientHelloMessage [33]byte
+
 	n, err := conn.Read(clientHelloMessage[:])
 	if err != nil {
 		return nil, err
 	}
+
 	if n != len(clientHelloMessage) {
 		return nil, fmt.Errorf("sscp clientHelloMessage was only %d bytes, expected %d", n, len(clientHelloMessage))
 	}
 
 	Ra := clientHelloMessage[17:]
 	var Rb [16]byte
+	var Key [16]byte
+
 	if _, err := io.ReadFull(rand.Reader, Rb[:]); err != nil {
 		return nil, err
 	}
-	var Key [16]byte
 	if _, err := io.ReadFull(rand.Reader, Key[:]); err != nil {
 		return nil, err
 	}
 
-	MK := KeyDerivation(secret, 128, 1024)
+	var MK []byte
+	//if len(secret) < 16 {
+	//	MK = KeyDerivation(secret, KeyDerivationDefaultWidth, KeyDerivationDefaultDepth)
+	//} else {
+	x := sha256.Sum256([]byte(secret))
+	MK = x[:]
+	//}
+
 	auth := hmac.New(sha256.New, MK[0:16])
 	enc, err := aes.NewCipher(MK[16:])
 	if err != nil {
@@ -59,6 +69,7 @@ func ServerWrapper(conn net.Conn, id []byte, secret []byte) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	if clientHelloMessage[0] != SSCONN_VERSION {
 		return nil, fmt.Errorf("Client version mismatch: client is %d, want %d", clientHelloMessage[0], SSCONN_VERSION)
 	}

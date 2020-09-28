@@ -4,6 +4,11 @@ import (
 	"crypto/sha256"
 )
 
+const (
+	KeyDerivationDefaultWidth = 128
+	KeyDerivationDefaultDepth = 128
+)
+
 func AreEqual(a []byte, b []byte) bool {
 	if len(a) != len(b) {
 		return false
