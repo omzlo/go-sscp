@@ -3,13 +3,27 @@ package main
 import (
 	"github.com/omzlo/go-sscp"
 	"log"
+	"os"
 )
 
 func main() {
 	var buffer [100]byte
+	var target, token string
+
+	if len(os.Args) < 2 {
+		target = "localhost:4242"
+	} else {
+		target = os.Args[1]
+	}
+
+	if len(os.Args) < 3 {
+		token = "password"
+	} else {
+		token = os.Args[2]
+	}
 
 	log.Print("connect")
-	conn, err := sscp.Dial("tcp", "localhost:4242", []byte("client"), []byte("password"))
+	conn, err := sscp.Dial("tcp", target, []byte("client"), []byte(token))
 	if err != nil {
 		log.Fatal(sscp.UnsafeCryptoError(err))
 	}
