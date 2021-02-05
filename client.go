@@ -219,11 +219,12 @@ func (conn *Conn) readPacket() (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		if uint32(n) != expected {
-			return 0, fmt.Errorf("Expected block of %d bytes of payload, got %d", expected, n)
+		if n < 0 {
+			return 0, fmt.Errorf("Expected block of %d bytes of payload at offset %d, got %d", expected, rcurrent, n)
 		}
-		payload = append(payload, block[:expected]...)
-		rcurrent += expected
+
+		payload = append(payload, block[:n]...)
+		rcurrent += uint32(n)
 	}
 
 	nonce := payload[:12]
