@@ -191,15 +191,15 @@ func (conn *Conn) readPacket() (int, error) {
 		return 0, fmt.Errorf("Truncated packet header")
 	}
 
-	payload_length := getInt32(aux[:4])
+	payload_length := getInt32(aux[0:4])
 	if payload_length < 16 {
 		return 0, fmt.Errorf("Payload truncation: expected at last 16 bytes")
 	}
 	payload_length -= 4
 
-	seqnum := getInt32(aux[4:])
+	seqnum := getInt32(aux[4:8])
 	if seqnum != conn.rIndex {
-		return 0, fmt.Errorf("Sequence number mismatch in read, expected %d, got %d", conn.rIndex, seqnum)
+		return 0, fmt.Errorf("Sequence number mismatch in read, expected %d, got %d. Header=%v", conn.rIndex, seqnum, aux)
 	}
 	conn.rIndex++
 
@@ -227,9 +227,11 @@ func (conn *Conn) readPacket() (int, error) {
 		rcurrent += uint32(n)
 	}
 
+	// fmt.Fprintf(os.Stderr, "> %v %v\n", aux, payload)
+
 	nonce := payload[:12]
 	ciphertext := payload[12:]
-	plaintext, err := conn.Cipher.Open(nil, nonce, ciphertext, aux[4:])
+	plaintext, err := conn.Cipher.Open(nil, nonce, ciphertext, aux[4:8])
 	if err != nil {
 		return 0, NewCryptoError(err.Error())
 	}
@@ -266,19 +268,20 @@ func (conn *Conn) Write(b []byte) (int, error) {
 	}
 
 	// Seqnum
-	putInt32(aux[4:], conn.wIndex)
+	putInt32(aux[4:8], conn.wIndex)
 	conn.wIndex++
 
-	ciphertext := conn.Cipher.Seal(nil, nonce, b, aux[4:])
+	ciphertext := conn.Cipher.Seal(nil, nonce, b, aux[4:8])
 
-	// PayloadLength
-	putInt32(aux[:4], uint32(len(ciphertext)+12+4))
+	// PayloadLength = len(ciphertext) + len(nounce) + len(seqnum)
+	putInt32(aux[0:4], uint32(len(ciphertext)+12+4))
 
 	packet := make([]byte, len(ciphertext)+len(aux)+12)
 	copy(packet, aux)
 	copy(packet[8:], nonce)
 	copy(packet[20:], ciphertext)
 
+	// fmt.Fprintf(os.Stderr, "< %v\n", packet)
 	return conn.conn.Write(packet)
 }
 
